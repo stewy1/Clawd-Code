@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generator, Optional, TypeAlias
+from typing import Any, Callable, Generator, Optional, TypeAlias
 
 
 @dataclass
@@ -28,9 +28,11 @@ class ChatResponse:
     usage: dict[str, Any]
     finish_reason: str
     reasoning_content: Optional[str] = None
+    tool_uses: Optional[list[dict[str, Any]]] = None
 
 
 MessageInput: TypeAlias = ChatMessage | dict[str, Any]
+TextChunkCallback: TypeAlias = Callable[[str], None]
 
 
 class BaseProvider(ABC):
@@ -51,11 +53,17 @@ class BaseProvider(ABC):
         self.model = model
 
     @abstractmethod
-    def chat(self, messages: list[MessageInput], **kwargs) -> ChatResponse:
+    def chat(
+        self,
+        messages: list[MessageInput],
+        tools: Optional[list[dict[str, Any]]] = None,
+        **kwargs
+    ) -> ChatResponse:
         """Synchronous chat completion.
 
         Args:
             messages: List of chat messages
+            tools: Optional list of tool schemas
             **kwargs: Additional provider-specific parameters
 
         Returns:
@@ -65,18 +73,36 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def chat_stream(
-        self, messages: list[MessageInput], **kwargs
+        self,
+        messages: list[MessageInput],
+        tools: Optional[list[dict[str, Any]]] = None,
+        **kwargs
     ) -> Generator[str, None, None]:
         """Streaming chat completion.
 
         Args:
             messages: List of chat messages
+            tools: Optional list of tool schemas
             **kwargs: Additional provider-specific parameters
 
         Yields:
             Chunks of response content
         """
         pass
+
+    def chat_stream_response(
+        self,
+        messages: list[MessageInput],
+        tools: Optional[list[dict[str, Any]]] = None,
+        on_text_chunk: TextChunkCallback | None = None,
+        **kwargs
+    ) -> ChatResponse:
+        """Stream a response while also returning the final structured ChatResponse.
+
+        Providers may override this to support tool-aware streaming. The default
+        implementation signals that rich streamed responses are unavailable.
+        """
+        raise NotImplementedError("Structured streaming is not supported by this provider")
 
     @abstractmethod
     def get_available_models(self) -> list[str]:

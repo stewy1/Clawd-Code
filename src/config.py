@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import base64
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,32 +16,30 @@ def get_config_path() -> Path:
     return config_dir / "config.json"
 
 
-def get_default_config() -> dict[str, Any]:
-    """Generate default configuration."""
+def _get_default_config_from_providers() -> dict[str, Any]:
+    """Build default config using provider info registry."""
+    from src.providers import PROVIDER_INFO
+
     return {
-        "default_provider": "glm",
+        "default_provider": "anthropic",
         "providers": {
-            "anthropic": {
+            name: {
                 "api_key": "",
-                "base_url": "https://api.anthropic.com",
-                "default_model": "claude-sonnet-4-20250514"
-            },
-            "openai": {
-                "api_key": "",
-                "base_url": "https://api.openai.com/v1",
-                "default_model": "gpt-4"
-            },
-            "glm": {
-                "api_key": "",
-                "base_url": "https://open.bigmodel.cn/api/paas/v4",
-                "default_model": "glm-4.5"
+                "base_url": info["default_base_url"],
+                "default_model": info["default_model"],
             }
+            for name, info in PROVIDER_INFO.items()
         },
         "session": {
             "auto_save": True,
             "max_history": 100
         }
     }
+
+
+def get_default_config() -> dict[str, Any]:
+    """Generate default configuration."""
+    return _get_default_config_from_providers()
 
 
 def _encode_api_key(api_key: str) -> str:
@@ -93,6 +92,7 @@ def save_config(config: dict[str, Any]) -> None:
         config: Configuration dictionary to save
     """
     config_path = get_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create a copy to avoid modifying the original
     config_copy = json.loads(json.dumps(config))
@@ -102,15 +102,25 @@ def save_config(config: dict[str, Any]) -> None:
         if provider_config.get("api_key"):
             provider_config["api_key"] = _encode_api_key(provider_config["api_key"])
 
-    with open(config_path, 'w', encoding='utf-8') as f:
-        json.dump(config_copy, f, indent=2, ensure_ascii=False)
+    if os.name == "nt":
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config_copy, f, indent=2, ensure_ascii=False)
+    else:
+        fd = os.open(
+            config_path,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(config_copy, f, indent=2, ensure_ascii=False)
+        os.chmod(config_path, 0o600)
 
 
 def get_provider_config(provider: str) -> dict[str, Any]:
     """Get configuration for a specific provider.
 
     Args:
-        provider: Provider name (anthropic, openai, glm)
+        provider: Provider name (anthropic, openai, glm, minimax)
 
     Returns:
         Provider configuration dictionary
@@ -129,7 +139,7 @@ def set_api_key(provider: str, api_key: str, base_url: Optional[str] = None,
     """Set API key for a provider.
 
     Args:
-        provider: Provider name (anthropic, openai, glm)
+        provider: Provider name (anthropic, openai, glm, minimax)
         api_key: API key to set
         base_url: Optional base URL override
         default_model: Optional default model override
@@ -171,4 +181,4 @@ def get_default_provider() -> str:
         Default provider name
     """
     config = load_config()
-    return config.get("default_provider", "glm")
+    return config.get("default_provider", "anthropic")

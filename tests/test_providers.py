@@ -5,12 +5,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from src.providers import (
-    AnthropicProvider,
-    GLMProvider,
-    OpenAIProvider,
-    get_provider_class,
-)
+from src.providers import get_provider_class
+from src.providers.anthropic_provider import AnthropicProvider
+from src.providers.glm_provider import GLMProvider
+from src.providers.openai_provider import OpenAIProvider
 from src.providers.base import ChatMessage, ChatResponse
 
 
@@ -63,7 +61,7 @@ class TestAnthropicProvider(unittest.TestCase):
     def test_initialization(self):
         """Test provider initialization."""
         provider = AnthropicProvider(api_key="test_key")
-        self.assertEqual(provider.model, "claude-sonnet-4-20250514")
+        self.assertEqual(provider.model, "claude-sonnet-4-6")
         self.assertEqual(provider.api_key, "test_key")
 
     def test_custom_model(self):
@@ -78,13 +76,17 @@ class TestAnthropicProvider(unittest.TestCase):
         self.assertIn("claude-sonnet-4-20250514", models)
         self.assertIn("claude-3-5-sonnet-20241022", models)
 
-    @patch("anthropic.Anthropic")
+    @patch("src.providers.anthropic_provider.anthropic.Anthropic")
     def test_chat(self, mock_anthropic):
         """Test synchronous chat."""
         # Setup mock
         mock_client = MagicMock()
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="Hello!")]
+        # Mock text block with type and text attributes
+        mock_text_block = MagicMock()
+        mock_text_block.type = "text"
+        mock_text_block.text = "Hello!"
+        mock_response.content = [mock_text_block]
         mock_response.model = "claude-sonnet-4-20250514"
         mock_response.usage = MagicMock(input_tokens=10, output_tokens=5)
         mock_response.stop_reason = "end_turn"
@@ -100,12 +102,16 @@ class TestAnthropicProvider(unittest.TestCase):
         self.assertEqual(response.model, "claude-sonnet-4-20250514")
         self.assertEqual(response.finish_reason, "end_turn")
 
-    @patch("anthropic.Anthropic")
+    @patch("src.providers.anthropic_provider.anthropic.Anthropic")
     def test_chat_accepts_dict_messages(self, mock_anthropic):
         """Test synchronous chat with dict messages."""
         mock_client = MagicMock()
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="Hello!")]
+        # Mock text block with type and text attributes
+        mock_text_block = MagicMock()
+        mock_text_block.type = "text"
+        mock_text_block.text = "Hello!"
+        mock_response.content = [mock_text_block]
         mock_response.model = "claude-sonnet-4-20250514"
         mock_response.usage = MagicMock(input_tokens=10, output_tokens=5)
         mock_response.stop_reason = "end_turn"
@@ -122,6 +128,46 @@ class TestAnthropicProvider(unittest.TestCase):
             mock_client.messages.create.call_args.kwargs["messages"], messages
         )
 
+    @patch("src.providers.anthropic_provider.anthropic.Anthropic")
+    def test_chat_stream_response_with_tool_use(self, mock_anthropic):
+        """Structured streaming returns final text and tool uses."""
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = mock_stream
+        mock_stream.__exit__.return_value = False
+        mock_stream.text_stream = iter(["Hello", " world"])
+
+        final_response = MagicMock()
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "Hello world"
+        tool_block = MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.id = "toolu_1"
+        tool_block.name = "Read"
+        tool_block.input = {"file_path": "README.md"}
+        final_response.content = [text_block, tool_block]
+        final_response.model = "claude-sonnet-4-20250514"
+        final_response.usage = MagicMock(input_tokens=10, output_tokens=5)
+        final_response.stop_reason = "tool_use"
+        mock_stream.get_final_message.return_value = final_response
+
+        mock_client.messages.stream.return_value = mock_stream
+        mock_anthropic.return_value = mock_client
+
+        provider = AnthropicProvider(api_key="test_key")
+        chunks: list[str] = []
+        response = provider.chat_stream_response(
+            [ChatMessage(role="user", content="Hi")],
+            tools=[{"name": "Read", "description": "", "input_schema": {"type": "object"}}],
+            on_text_chunk=chunks.append,
+        )
+
+        self.assertEqual("".join(chunks), "Hello world")
+        self.assertEqual(response.content, "Hello world")
+        self.assertEqual(response.finish_reason, "tool_use")
+        self.assertEqual(response.tool_uses[0]["name"], "Read")
+
 
 class TestOpenAIProvider(unittest.TestCase):
     """Test OpenAI provider."""
@@ -129,7 +175,7 @@ class TestOpenAIProvider(unittest.TestCase):
     def test_initialization(self):
         """Test provider initialization."""
         provider = OpenAIProvider(api_key="test_key")
-        self.assertEqual(provider.model, "gpt-4")
+        self.assertEqual(provider.model, "gpt-5.4")
 
     def test_custom_model(self):
         """Test provider with custom model."""
@@ -193,6 +239,53 @@ class TestOpenAIProvider(unittest.TestCase):
             mock_client.chat.completions.create.call_args.kwargs["messages"], messages
         )
 
+    @patch("src.providers.openai_provider.OpenAI")
+    def test_chat_stream_response_rebuilds_tool_calls(self, mock_openai):
+        """Streaming chunks are rebuilt into a final response with tool calls."""
+        mock_client = MagicMock()
+
+        chunk1 = MagicMock()
+        chunk1.model = "gpt-4"
+        chunk1.usage = None
+        chunk1.choices = [MagicMock()]
+        chunk1.choices[0].finish_reason = None
+        chunk1.choices[0].delta.content = "Hello"
+        chunk1.choices[0].delta.reasoning_content = None
+        chunk1.choices[0].delta.tool_calls = []
+
+        tool_call_delta = MagicMock()
+        tool_call_delta.index = 0
+        tool_call_delta.id = "call_1"
+        tool_call_delta.function = MagicMock(name="function")
+        tool_call_delta.function.name = "Read"
+        tool_call_delta.function.arguments = '{"file_path":"README.md"}'
+
+        chunk2 = MagicMock()
+        chunk2.model = "gpt-4"
+        chunk2.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        chunk2.choices = [MagicMock()]
+        chunk2.choices[0].finish_reason = "tool_calls"
+        chunk2.choices[0].delta.content = None
+        chunk2.choices[0].delta.reasoning_content = None
+        chunk2.choices[0].delta.tool_calls = [tool_call_delta]
+
+        mock_client.chat.completions.create.return_value = iter([chunk1, chunk2])
+        mock_openai.return_value = mock_client
+
+        provider = OpenAIProvider(api_key="test_key")
+        chunks: list[str] = []
+        response = provider.chat_stream_response(
+            [ChatMessage(role="user", content="Hi")],
+            tools=[{"name": "Read", "description": "", "input_schema": {"type": "object"}}],
+            on_text_chunk=chunks.append,
+        )
+
+        self.assertEqual("".join(chunks), "Hello")
+        self.assertEqual(response.content, "Hello")
+        self.assertEqual(response.finish_reason, "tool_calls")
+        self.assertEqual(response.tool_uses[0]["name"], "Read")
+        self.assertEqual(response.usage["total_tokens"], 15)
+
 
 class TestGLMProvider(unittest.TestCase):
     """Test GLM provider."""
@@ -200,7 +293,7 @@ class TestGLMProvider(unittest.TestCase):
     def test_initialization(self):
         """Test provider initialization."""
         provider = GLMProvider(api_key="test_key")
-        self.assertEqual(provider.model, "glm-4.5")
+        self.assertEqual(provider.model, "zai/glm-5")
 
     def test_custom_model(self):
         """Test provider with custom model."""
@@ -211,8 +304,8 @@ class TestGLMProvider(unittest.TestCase):
         """Test getting available models."""
         provider = GLMProvider(api_key="test_key")
         models = provider.get_available_models()
-        self.assertIn("glm-4.5", models)
-        self.assertIn("glm-4", models)
+        self.assertIn("zai/glm-4.5", models)
+        self.assertIn("zai/glm-4", models)
 
     @patch("src.providers.glm_provider.ZhipuAI")
     def test_chat(self, mock_zhipu):

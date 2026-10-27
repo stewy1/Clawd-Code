@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import json
 import base64
+import os
 
 from src.config import (
     get_config_path,
@@ -59,25 +60,25 @@ class TestDefaultConfig(unittest.TestCase):
         self.assertIn("openai", config["providers"])
         self.assertIn("glm", config["providers"])
 
-    def test_default_provider_is_glm(self):
-        """Test that default provider is GLM."""
+    def test_default_provider_is_anthropic(self):
+        """Test that default provider is Anthropic."""
         config = get_default_config()
-        self.assertEqual(config["default_provider"], "glm")
+        self.assertEqual(config["default_provider"], "anthropic")
 
     def test_default_models(self):
         """Test default models for providers."""
         config = get_default_config()
         self.assertEqual(
             config["providers"]["anthropic"]["default_model"],
-            "claude-sonnet-4-20250514"
+            "claude-sonnet-4-6"
         )
         self.assertEqual(
             config["providers"]["openai"]["default_model"],
-            "gpt-4"
+            "gpt-5.4"
         )
         self.assertEqual(
             config["providers"]["glm"]["default_model"],
-            "glm-4.5"
+            "zai/glm-5"
         )
 
 
@@ -194,6 +195,7 @@ class TestLoadSaveConfig(unittest.TestCase):
                 }
             }
 
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w') as f:
                 json.dump(raw_config, f)
 
@@ -205,6 +207,17 @@ class TestLoadSaveConfig(unittest.TestCase):
                     config["providers"]["glm"]["api_key"],
                     "secret_key"
                 )
+
+    @unittest.skipIf(os.name == "nt", "POSIX file permission semantics differ on Windows")
+    def test_config_file_permissions_restricted_on_save(self):
+        """Test that saved config uses owner-only permissions on POSIX systems."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / ".clawd" / "config.json"
+
+            with patch('src.config.get_config_path', return_value=config_path):
+                save_config(get_default_config())
+                mode = config_path.stat().st_mode & 0o777
+                self.assertEqual(mode, 0o600)
 
 
 class TestProviderConfig(unittest.TestCase):
@@ -300,7 +313,7 @@ class TestDefaultProvider(unittest.TestCase):
 
             with patch('src.config.get_config_path', return_value=config_path):
                 provider = get_default_provider()
-                self.assertEqual(provider, "glm")
+                self.assertEqual(provider, "anthropic")
 
 
 if __name__ == '__main__':

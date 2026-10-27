@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.prompt import Prompt
+from rich.table import Table
 
 
 def main():
@@ -26,6 +27,7 @@ Examples:
   clawd --version          Show version
   clawd login              Configure API keys
   clawd config             Show current configuration
+  clawd --stream           Start REPL with live response rendering
   clawd                    Start interactive REPL
 """
     )
@@ -39,6 +41,11 @@ Examples:
         '--config',
         action='store_true',
         help='Show current configuration'
+    )
+    parser.add_argument(
+        '--stream',
+        action='store_true',
+        help='Enable live response rendering in the REPL'
     )
 
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
@@ -68,7 +75,28 @@ Examples:
         return show_config()
 
     # Default: start REPL
-    return start_repl()
+    return start_repl(stream=args.stream)
+
+
+def _show_provider_defaults_table() -> None:
+    """Print a table showing available providers and their defaults."""
+    from src.providers import PROVIDER_INFO
+
+    console = Console()
+    table = Table(title="Available Providers & Defaults", show_header=True, header_style="bold")
+    table.add_column("Provider", style="cyan")
+    table.add_column("Default Model", style="magenta")
+    table.add_column("Base URL", style="green")
+
+    for name, info in PROVIDER_INFO.items():
+        table.add_row(
+            f"{name} ({info['label']})",
+            info["default_model"],
+            info["default_base_url"],
+        )
+
+    console.print(table)
+    console.print()
 
 
 def handle_login():
@@ -76,12 +104,20 @@ def handle_login():
     console = Console()
     console.print("\n[bold blue]Clawd Codex - API Configuration[/bold blue]\n")
 
+    # Show available providers and their defaults
+    _show_provider_defaults_table()
+
     # Select provider
+    from src.providers import PROVIDER_INFO
+    provider_names = list(PROVIDER_INFO.keys())
+
     provider = Prompt.ask(
         "Select LLM provider",
-        choices=["anthropic", "openai", "glm"],
-        default="glm"
+        choices=provider_names,
+        default="anthropic"
     )
+
+    info = PROVIDER_INFO[provider]
 
     # Input API Key
     api_key = Prompt.ask(
@@ -93,30 +129,25 @@ def handle_login():
         console.print("\n[red]Error: API Key cannot be empty[/red]")
         return 1
 
-    # Optional: Base URL
-    console.print(f"\n[dim]Press Enter to use default, or enter custom base URL[/dim]")
+    # Optional: Base URL (show default)
+    console.print(f"\n[dim]Default:[/dim] {info['default_base_url']}")
     base_url = Prompt.ask(
-        f"{provider.upper()} Base URL (optional)",
-        default=""
+        f"{provider.upper()} Base URL",
+        default=info["default_base_url"]
     )
 
-    # Optional: Default Model
-    console.print(f"\n[dim]Press Enter to use default model[/dim]")
+    # Optional: Default Model (show available options)
+    console.print(f"\n[dim]Available models:[/dim] {', '.join(info['available_models'])}")
+    console.print(f"[dim]Default:[/dim] [bold]{info['default_model']}[/bold]")
     default_model = Prompt.ask(
-        f"{provider.upper()} Default Model (optional)",
-        default=""
+        f"{provider.upper()} Default Model",
+        default=info["default_model"]
     )
 
     # Save configuration
     from src.config import set_api_key, set_default_provider
 
-    kwargs = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    if default_model:
-        kwargs["default_model"] = default_model
-
-    set_api_key(provider, **kwargs)
+    set_api_key(provider, api_key=api_key, base_url=base_url, default_model=default_model)
     set_default_provider(provider)
 
     console.print(f"\n[green]✓ {provider.upper()} API Key saved successfully![/green]")
@@ -160,13 +191,13 @@ def show_config():
     return 0
 
 
-def start_repl():
+def start_repl(stream: bool = False):
     """Start interactive REPL."""
     from src.config import get_default_provider
     from src.repl import ClawdREPL
 
     provider = get_default_provider()
-    repl = ClawdREPL(provider_name=provider)
+    repl = ClawdREPL(provider_name=provider, stream=stream)
     repl.run()
     return 0
 

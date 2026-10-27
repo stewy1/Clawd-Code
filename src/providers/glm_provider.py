@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Generator, Optional
+from typing import Any, Optional
 
-from zhipuai import ZhipuAI
+try:
+    from zhipuai import ZhipuAI  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    ZhipuAI = None
 
-from .base import BaseProvider, ChatResponse, MessageInput
+from .openai_compatible import OpenAICompatibleProvider
 
 
-class GLMProvider(BaseProvider):
-    """GLM (Zhipu AI) provider."""
+class GLMProvider(OpenAICompatibleProvider):
+    """GLM (Zhipu AI) provider using Zhipu SDK.
+
+    GLM models on z.ai require the 'zai/' prefix in model names.
+    """
 
     def __init__(
         self, api_key: str, base_url: Optional[str] = None, model: Optional[str] = None
@@ -20,99 +26,36 @@ class GLMProvider(BaseProvider):
         Args:
             api_key: Zhipu AI API key
             base_url: Base URL (optional)
-            model: Default model (default: glm-4.5)
+            model: Default model (default: zai/glm-5)
         """
-        super().__init__(api_key, base_url, model or "glm-4.5")
+        super().__init__(api_key, base_url, model or "zai/glm-5")
 
-        # Initialize client
-        self.client = ZhipuAI(api_key=api_key)
-
-    def chat(self, messages: list[MessageInput], **kwargs) -> ChatResponse:
-        """Synchronous chat completion.
-
-        Args:
-            messages: List of chat messages (ChatMessage or dict)
-            **kwargs: Additional parameters
-
-        Returns:
-            Chat response
-        """
-        model = self._get_model(**kwargs)
-
-        # Convert messages
-        glm_messages = self._prepare_messages(messages)
-
-        # Make API call
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=glm_messages,
-            **{k: v for k, v in kwargs.items() if k != "model"},
-        )
-
-        # Extract content
-        choice = response.choices[0]
-
-        # GLM-4.5 specific: reasoning_content
-        reasoning_content = None
-        if (
-            hasattr(choice.message, "reasoning_content")
-            and choice.message.reasoning_content
-        ):
-            reasoning_content = choice.message.reasoning_content
-
-        return ChatResponse(
-            content=choice.message.content,
-            model=response.model,
-            usage={
-                "input_tokens": response.usage.prompt_tokens,
-                "output_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens,
-            },
-            finish_reason=choice.finish_reason,
-            reasoning_content=reasoning_content,
-        )
-
-    def chat_stream(
-        self, messages: list[MessageInput], **kwargs
-    ) -> Generator[str, None, None]:
-        """Streaming chat completion.
-
-        Args:
-            messages: List of chat messages (ChatMessage or dict)
-            **kwargs: Additional parameters
-
-        Yields:
-            Chunks of response content
-        """
-        model = self._get_model(**kwargs)
-
-        # Convert messages
-        glm_messages = self._prepare_messages(messages)
-
-        # Stream API call
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=glm_messages,
-            stream=True,
-            **{k: v for k, v in kwargs.items() if k != "model"},
-        )
-
-        for chunk in response:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
+    def _create_client(self) -> Any:
+        """Create Zhipu AI SDK client."""
+        if ZhipuAI is None:  # pragma: no cover
+            raise ModuleNotFoundError(
+                "zhipuai package is not installed. Install optional dependencies to use GLMProvider."
+            )
+        return ZhipuAI(api_key=self.api_key)
 
     def get_available_models(self) -> list[str]:
         """Get list of available GLM models.
 
         Returns:
-            List of model names
+            List of model names (with zai/ prefix for z.ai API)
         """
         return [
-            "glm-4.5",
-            "glm-4",
-            "glm-4-air",
-            "glm-4-airx",
-            "glm-4-flash",
-            "glm-4-plus",
-            "glm-3-turbo",
+            # GLM-5 series (latest, requires zai/ prefix)
+            "zai/glm-5",
+            "zai/glm-5-turbo",
+            # GLM-4 series (standard, zai/ prefix)
+            "zai/glm-4",
+            "zai/glm-4-plus",
+            "zai/glm-4-air",
+            "zai/glm-4-flash",
+            "zai/glm-4.5",
+            "zai/glm-4.6",
+            "zai/glm-4.7",
+            # GLM-3 series (legacy)
+            "zai/glm-3-turbo",
         ]

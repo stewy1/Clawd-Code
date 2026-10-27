@@ -21,6 +21,8 @@ wheels/
 *.egg
 
 # Virtual environments
+src/claude-code-ref/
+
 venv/
 ENV/
 env/
@@ -77,3 +79,6 @@ CLAUDE.md
 sessions/
 .transcripts/
 .port_sessions/
+
+# Claude Code personal settings
+CLAUDE.local.md
